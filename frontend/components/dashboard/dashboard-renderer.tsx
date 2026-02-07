@@ -5,16 +5,36 @@ import { Renderer } from '@json-render/react'
 import { registry } from '@/lib/json-render'
 import { motion } from 'framer-motion'
 import { cn } from '@/lib/utils'
+import type { DashboardSpec, Block } from '@/lib/types'
+import { validateBlock } from '@/lib/validate'
+
+const FULL_WIDTH_TYPES = new Set([
+    'executive-summary',
+    'line-chart',
+    'event-timeline',
+    'candlestick-chart',
+    'correlation-matrix',
+])
 
 interface DashboardRendererProps {
-    spec: any
+    spec: DashboardSpec
+}
+
+function BlockErrorFallback({ errors }: { errors: string[] }) {
+    return (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <p className="font-medium">Could not render this block</p>
+            <ul className="mt-1 list-disc pl-4 text-xs">
+                {errors.map((e, i) => <li key={i}>{e}</li>)}
+            </ul>
+        </div>
+    )
 }
 
 export function DashboardRenderer({ spec }: DashboardRendererProps) {
-    if (!spec || !spec.blocks) return null
+    if (!spec || !Array.isArray(spec.blocks)) return null
 
-    const chaos = spec.chaos || {}
-
+    const chaos = spec.chaos ?? {}
     const isMatrix = chaos.theme === 'matrix'
 
     const getAnimationProps = () => {
@@ -27,7 +47,7 @@ export function DashboardRenderer({ spec }: DashboardRendererProps) {
                 transition: {
                     duration: 0.5,
                     repeat: Infinity,
-                    ease: "linear"
+                    ease: "linear" as const,
                 }
             }
         }
@@ -42,11 +62,11 @@ export function DashboardRenderer({ spec }: DashboardRendererProps) {
                 transition: {
                     duration: 2,
                     repeat: Infinity,
-                    ease: "linear"
+                    ease: "linear" as const,
                 }
             }
         }
-        return {}
+        return {} as { animate?: Record<string, unknown>; transition?: Record<string, unknown> }
     }
 
     const animationProps = getAnimationProps()
@@ -67,20 +87,31 @@ export function DashboardRenderer({ spec }: DashboardRendererProps) {
                 ...animationProps.transition
             }}
         >
-            {spec.blocks.map((block: any, index: number) => (
-                <div
-                    key={index}
-                    className={cn(
-                        block.type === 'executive-summary' || block.type === 'line-chart' || block.type === 'event-timeline' || block.type === 'candlestick-chart' || block.type === 'correlation-matrix' ? 'col-span-full' : '',
-                        isMatrix ? "border border-[#00FF41] p-2" : ""
-                    )}
-                >
-                    <Renderer
-                        spec={block}
-                        registry={registry}
-                    />
-                </div>
-            ))}
+            {spec.blocks.map((block: Block, index: number) => {
+                const errors = validateBlock(block, index)
+                if (errors.length > 0) {
+                    return (
+                        <div key={index} className="col-span-full">
+                            <BlockErrorFallback errors={errors} />
+                        </div>
+                    )
+                }
+
+                return (
+                    <div
+                        key={index}
+                        className={cn(
+                            FULL_WIDTH_TYPES.has(block.type) ? 'col-span-full' : '',
+                            isMatrix ? "border border-[#00FF41] p-2" : ""
+                        )}
+                    >
+                        <Renderer
+                            spec={block}
+                            registry={registry}
+                        />
+                    </div>
+                )
+            })}
         </motion.div>
     )
 }

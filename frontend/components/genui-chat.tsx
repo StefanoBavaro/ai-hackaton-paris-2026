@@ -4,14 +4,22 @@ import { useState } from "react"
 import { ChatInput } from "@/components/chat/chat-input"
 import { ChatMessage } from "@/components/chat/chat-message"
 import { SuggestedPrompts } from "@/components/chat/suggested-prompts"
-import type { Message } from "@/lib/types"
+import type { Message, ChaosState } from "@/lib/types"
+import { validateAPIResponse } from "@/lib/validate"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
+const DEFAULT_CHAOS: ChaosState = {
+    rotation: 0,
+    fontFamily: "Inter",
+    animation: null,
+    theme: "professional",
+}
 
 export function GenUIChat() {
     const [messages, setMessages] = useState<Message[]>([])
     const [isLoading, setIsLoading] = useState(false)
-    const [currentChaos, setCurrentChaos] = useState<any>({})
+    const [currentChaos, setCurrentChaos] = useState<ChaosState>(DEFAULT_CHAOS)
 
     const handleSubmit = async (query: string) => {
         const userMessage: Message = {
@@ -30,7 +38,7 @@ export function GenUIChat() {
                 },
                 body: JSON.stringify({
                     message: query,
-                    currentChaos: currentChaos
+                    currentChaos,
                 }),
             })
 
@@ -40,16 +48,31 @@ export function GenUIChat() {
 
             const data = await response.json()
 
+            // Validate the API response against the contract
+            const { response: validated, errors } = validateAPIResponse(data)
+
+            if (!validated) {
+                const errorMessage: Message = {
+                    id: (Date.now() + 1).toString(),
+                    role: "assistant",
+                    content: `The server returned an unexpected response.\n${errors.map(e => `• ${e}`).join("\n")}`,
+                }
+                setMessages((prev) => [...prev, errorMessage])
+                return
+            }
+
+            // Persist chaos: merge incoming chaos on top of current state
+            // CONTRACT.md: "Chaos state persists across queries unless explicitly overridden"
+            if (validated.dashboardSpec?.chaos) {
+                setCurrentChaos((prev) => ({ ...prev, ...validated.dashboardSpec!.chaos }))
+            }
+
             const assistantMessage: Message = {
                 id: (Date.now() + 1).toString(),
                 role: "assistant",
-                content: data.assistantMessage,
-                dashboardSpec: data.dashboardSpec,
-                suggestedPrompts: data.suggestedPrompts,
-            }
-
-            if (data.dashboardSpec?.chaos) {
-                setCurrentChaos(data.dashboardSpec.chaos);
+                content: validated.assistantMessage,
+                dashboardSpec: validated.dashboardSpec,
+                suggestedPrompts: validated.suggestedPrompts,
             }
 
             setMessages((prev) => [...prev, assistantMessage])
@@ -68,7 +91,7 @@ export function GenUIChat() {
 
     const handleClearChat = () => {
         setMessages([])
-        setCurrentChaos({})
+        setCurrentChaos(DEFAULT_CHAOS)
     }
 
     return (
