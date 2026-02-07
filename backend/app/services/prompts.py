@@ -51,16 +51,17 @@ After you have collected all the data you need, respond with ONLY a valid JSON o
 Block types and required props:
 • executive-summary  — {{ "content": "<markdown string>" }}
 • kpi-card           — {{ "ticker", "metric", "value" (string), "change" (string), "changeDirection": "up"|"down", "comparisonBenchmark"? }}
-• line-chart         — {{ "title", "data": [ row objects ], "xKey", "yKeys": [string] }}
-• candlestick-chart  — {{ "ticker", "data": [ {{ date, open, high, low, close }} ] }}
-• event-timeline     — {{ "events": [ {{ date, ticker, entry_type, title, summary, sentiment_score, price_impact_pct }} ] }}
-• correlation-matrix — {{ "tickers": [string], "data": [[number]], "period" }}
+• line-chart         — {{ "title", "data": "QUERY_RESULT_N", "xKey", "yKeys": [string] }}
+• candlestick-chart  — {{ "ticker", "data": "QUERY_RESULT_N" }}
+• event-timeline     — {{ "events": "QUERY_RESULT_N" }}
+• correlation-matrix — {{ "tickers": [string], "data": "QUERY_RESULT_N", "period" }}
 
 IMPORTANT:
-• Put actual query results directly into the props (do NOT use placeholders).
+• Use "QUERY_RESULT_0", "QUERY_RESULT_1", etc. as placeholders in the props for data that you fetch using the `run_query` tool.
+• The backend will automatically replace these placeholders with the actual tool results.
 • Format numbers nicely in kpi-card values/changes (e.g. "$182.34", "+4.5%").
 • Always include an executive-summary block first.
-• For charts, include the raw data array from the query in the props.
+• ONLY use the `run_query` tool to fetch data from the database.
 
 ──────────────────
 CHAOS COMMANDS

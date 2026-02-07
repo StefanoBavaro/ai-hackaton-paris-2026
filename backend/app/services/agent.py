@@ -146,7 +146,6 @@ class AgentService:
 
         all_messages: list = []
         step_count = 0
-
         try:
             async for event in graph.astream_events(inputs, version="v2"):
                 kind = event.get("event", "")
@@ -181,7 +180,18 @@ class AgentService:
                         },
                     }
 
-                # Chat model finished — capture the message
+                # Chat model streaming — capture deltas
+                elif kind == "on_chat_model_stream":
+                    delta = event.get("data", {}).get("chunk", None)
+                    if delta and hasattr(delta, "content"):
+                        content_delta = _extract_text(delta.content)
+                        if content_delta:
+                            yield {
+                                "event": "content",
+                                "data": {"delta": content_delta},
+                            }
+
+                # Chat model finished — capture the full message for final result
                 elif kind == "on_chat_model_end":
                     output = event.get("data", {}).get("output", None)
                     if output and hasattr(output, "content"):

@@ -20,6 +20,7 @@ export function GenUIChat() {
     const [messages, setMessages] = useState<Message[]>([])
     const [isLoading, setIsLoading] = useState(false)
     const [currentChaos, setCurrentChaos] = useState<ChaosState>(DEFAULT_CHAOS)
+    const [streamingContent, setStreamingContent] = useState("")
     const [streamingSteps, setStreamingSteps] = useState<AgentStep[]>([])
     const abortRef = useRef<AbortController | null>(null)
 
@@ -32,6 +33,7 @@ export function GenUIChat() {
         setMessages((prev) => [...prev, userMessage])
         setIsLoading(true)
         setStreamingSteps([])
+        setStreamingContent("")
 
         abortRef.current = new AbortController()
 
@@ -83,6 +85,7 @@ export function GenUIChat() {
         } finally {
             setIsLoading(false)
             setStreamingSteps([])
+            setStreamingContent("")
             abortRef.current = null
         }
     }
@@ -90,6 +93,8 @@ export function GenUIChat() {
     const handleSSEEvent = (event: string, data: any, _query: string) => {
         if (event === "step") {
             setStreamingSteps((prev) => [...prev, data as AgentStep])
+        } else if (event === "content") {
+            setStreamingContent((prev) => prev + (data.delta || ""))
         } else if (event === "result") {
             const { response: validated, errors } = validateAPIResponse(data)
 
@@ -108,8 +113,6 @@ export function GenUIChat() {
             }
 
             setMessages((prev) => {
-                // Collect steps accumulated so far
-                const steps = [...(prev.length > 0 ? [] : [])];
                 return [
                     ...prev,
                     {
@@ -218,9 +221,15 @@ export function GenUIChat() {
 
                     {/* Streaming progress indicator */}
                     {isLoading && (
-                        <div className="space-y-2">
+                        <div className="space-y-6">
+                            {streamingContent && (
+                                <div className="text-sm text-foreground/90 whitespace-pre-wrap animate-in fade-in slide-in-from-bottom-2">
+                                    {streamingContent}
+                                </div>
+                            )}
+
                             {streamingSteps.length > 0 ? (
-                                <div className="space-y-1.5">
+                                <div className="space-y-1.5 border-l-2 border-muted pl-4">
                                     {streamingSteps.map((step, i) => (
                                         <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
                                             <div className="h-1 w-1 rounded-full bg-blue-400" />
@@ -241,10 +250,12 @@ export function GenUIChat() {
                                     </div>
                                 </div>
                             ) : (
-                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                    <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-                                    <span className="font-serif italic text-blue-600">Generating your dashboard...</span>
-                                </div>
+                                !streamingContent && (
+                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                        <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                                        <span className="font-serif italic text-blue-600">Generating your dashboard...</span>
+                                    </div>
+                                )
                             )}
                         </div>
                     )}

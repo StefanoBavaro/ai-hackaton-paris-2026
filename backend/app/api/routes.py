@@ -120,6 +120,8 @@ async def handle_query_stream(request: QueryRequest) -> StreamingResponse:
                         },
                     }
                     yield f"event: result\ndata: {json.dumps(final, default=str)}\n\n"
+                elif event_type == "content":
+                    yield f"event: content\ndata: {json.dumps(data, default=str)}\n\n"
                 else:
                     yield f"event: {event_type}\ndata: {json.dumps(data, default=str)}\n\n"
 
