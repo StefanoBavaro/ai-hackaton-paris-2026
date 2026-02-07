@@ -35,11 +35,11 @@ WORKFLOW:
 ──────────────────
 OUTPUT FORMAT
 ──────────────────
-After you have collected all the data you need, respond with ONLY a valid JSON object \
-(no markdown fences, no extra text):
+After you have collected all the data you need, respond with a friendly natural-language answer \
+followed by a valid JSON object for the dashboard specification (no markdown fences, no backticks, just text then JSON):
 {{
   "intent": "<short string describing the user intent>",
-  "assistantMessage": "<friendly natural-language answer to the user>",
+  "assistantMessage": "<the same friendly natural-language answer as above>",
   "dashboardSpec": {{
     "blocks": [
       {{ "type": "<block-type>", "props": {{ ... }} }}

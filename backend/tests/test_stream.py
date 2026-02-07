@@ -35,3 +35,16 @@ def test_placeholder_regex():
     assert PLACEHOLDER_RE.match("QUERY_RESULT_10")
     assert not PLACEHOLDER_RE.match("QUERY_RESULT")
     assert not PLACEHOLDER_RE.match("RESULT_0")
+
+def test_parse_json_with_prefix():
+    from app.utils.json_tools import parse_json_from_text
+    text = "Sure, here is your data: { \"intent\": \"test\", \"assistantMessage\": \"hello\" }"
+    parsed = parse_json_from_text(text)
+    assert parsed["intent"] == "test"
+    assert parsed["assistantMessage"] == "hello"
+
+def test_parse_json_with_markdown():
+    from app.utils.json_tools import parse_json_from_text
+    text = "Here it is:\n```json\n{ \"intent\": \"test\" }\n```"
+    parsed = parse_json_from_text(text)
+    assert parsed["intent"] == "test"

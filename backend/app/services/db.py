@@ -21,7 +21,10 @@ class DuckDBService:
                 result = conn.execute(sql, params)
             else:
                 result = conn.execute(sql)
-            return result.fetchdf().to_dict(orient="records")
+            df = result.fetchdf()
+            # use to_json to handle NaN/NaT -> null conversion reliably
+            import json as json_mod
+            return json_mod.loads(df.to_json(orient="records", date_format="iso"))
         except Exception as exc:
             logger.exception("DuckDB query failed", extra={"sql": sql})
             raise exc

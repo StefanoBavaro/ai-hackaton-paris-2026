@@ -146,6 +146,8 @@ class AgentService:
 
         all_messages: list = []
         step_count = 0
+        in_json_block = False
+
         try:
             async for event in graph.astream_events(inputs, version="v2"):
                 kind = event.get("event", "")
@@ -185,11 +187,35 @@ class AgentService:
                     delta = event.get("data", {}).get("chunk", None)
                     if delta and hasattr(delta, "content"):
                         content_delta = _extract_text(delta.content)
-                        if content_delta:
-                            yield {
-                                "event": "content",
-                                "data": {"delta": content_delta},
-                            }
+                        if content_delta and not in_json_block:
+                            # Stop if we see { or ```
+                            if "{" not in content_delta and "```" not in content_delta:
+                                yield {
+                                    "event": "content",
+                                    "data": {"delta": content_delta},
+                                }
+                            else:
+                                in_json_block = True
+                                # Find whichever comes first
+                                idx_json = content_delta.find("{")
+                                idx_md = content_delta.find("```")
+                                
+                                # Use the smaller non-negative index
+                                split_idx = -1
+                                if idx_json != -1 and idx_md != -1:
+                                    split_idx = min(idx_json, idx_md)
+                                elif idx_json != -1:
+                                    split_idx = idx_json
+                                elif idx_md != -1:
+                                    split_idx = idx_md
+                                
+                                if split_idx != -1:
+                                    prefix = content_delta[:split_idx]
+                                    if prefix:
+                                        yield {
+                                            "event": "content",
+                                            "data": {"delta": prefix},
+                                        }
 
                 # Chat model finished — capture the full message for final result
                 elif kind == "on_chat_model_end":
