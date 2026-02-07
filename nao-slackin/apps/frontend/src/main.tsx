@@ -1,0 +1,54 @@
+import './styles.css';
+import { StrictMode } from 'react';
+import { RouterProvider, createRouter } from '@tanstack/react-router';
+import ReactDOM from 'react-dom/client';
+import { PostHogProvider } from './contexts/posthog.provider';
+import { ThemeProvider } from './contexts/theme.provider';
+import { SidebarProvider } from './contexts/sidebar.provider';
+import { routeTree } from './routeTree.gen';
+import reportWebVitals from './reportWebVitals';
+import { UserPageProvider } from './contexts/user.provider';
+
+// Register the router instance for type safety
+declare module '@tanstack/react-router' {
+	interface Register {
+		router: typeof router;
+	}
+	interface HistoryState {
+		fromMessageSend?: boolean;
+	}
+}
+
+// Create a new router instance
+const router = createRouter({
+	routeTree,
+	context: {},
+	defaultPreload: 'intent',
+	scrollRestoration: true,
+	defaultStructuralSharing: true,
+	defaultPreloadStaleTime: 0,
+});
+
+// Render the app
+const rootElement = document.getElementById('app')!;
+if (!rootElement.innerHTML) {
+	const root = ReactDOM.createRoot(rootElement);
+	root.render(
+		<StrictMode>
+			<ThemeProvider>
+				<SidebarProvider>
+					<PostHogProvider>
+						<UserPageProvider>
+							<RouterProvider router={router} />
+						</UserPageProvider>
+					</PostHogProvider>
+				</SidebarProvider>
+			</ThemeProvider>
+		</StrictMode>,
+	);
+}
+
+// If you want to start measuring performance in your app, pass a function
+// to log results (for example: reportWebVitals(console.log))
+// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
+reportWebVitals();

@@ -1,0 +1,88 @@
+import { ArrowLeftFromLine, ArrowRightToLine, PlusIcon } from 'lucide-react';
+import { useEffect, useCallback } from 'react';
+import { useNavigate } from '@tanstack/react-router';
+
+import { Button } from '@/components/ui/button';
+import { cn, hideIf } from '@/lib/utils';
+import { useSidebar } from '@/contexts/sidebar.provider';
+import NaoLogoGreyscale from '@/components/icons/nao-logo-greyscale.svg';
+
+export function Sidebar() {
+	const navigate = useNavigate();
+	const { isCollapsed, toggleSidebar } = useSidebar();
+
+	const handleStartNewChat = useCallback(() => {
+		navigate({ to: '/' });
+	}, [navigate]);
+
+	// Keyboard shortcut: Shift+Cmd+O for new chat
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			if (e.shiftKey && e.metaKey && e.key.toLowerCase() === 'o') {
+				e.preventDefault();
+				handleStartNewChat();
+			}
+		};
+
+		window.addEventListener('keydown', handleKeyDown);
+		return () => window.removeEventListener('keydown', handleKeyDown);
+	}, [handleStartNewChat]);
+
+	return (
+		<div
+			className={cn(
+				'flex flex-col border-r border-sidebar-border transition-[width,background-color] duration-300 overflow-hidden',
+				isCollapsed ? 'w-13 bg-panel' : 'w-72 bg-sidebar',
+			)}
+		>
+			<div className='p-2 flex flex-col gap-2'>
+				<div className='flex items-center relative'>
+					<div
+						className={cn(
+							'flex items-center justify-center p-2 mr-auto absolute left-0 z-0 transition-[opacity,visibility] duration-300',
+							hideIf(isCollapsed),
+						)}
+					>
+						<NaoLogoGreyscale className='size-5' />
+					</div>
+
+					<Button
+						variant='ghost'
+						size='icon-md'
+						onClick={toggleSidebar}
+						className={cn('text-muted-foreground ml-auto z-10')}
+					>
+						{isCollapsed ? (
+							<ArrowRightToLine className='size-4' />
+						) : (
+							<ArrowLeftFromLine className='size-4' />
+						)}
+					</Button>
+				</div>
+
+				<Button
+					variant='outline'
+					className={cn(
+						'w-full justify-start relative group shadow-none transition-[padding,height,width,background-color] duration-300 p-[9px_!important]',
+						isCollapsed ? 'h-9 w-9' : '',
+					)}
+					onClick={handleStartNewChat}
+				>
+					<PlusIcon className='size-4' />
+					<div
+						className={cn(
+							'flex items-center transition-[opacity,visibility] duration-300',
+							hideIf(isCollapsed),
+						)}
+					>
+						<span>New Chat</span>
+						<kbd className='group-hover:opacity-100 opacity-0 absolute right-3 text-[10px] text-muted-foreground font-sans transition-opacity'>
+							⇧⌘O
+						</kbd>
+					</div>
+				</Button>
+			</div>
+			<div className='flex-1' />
+		</div>
+	);
+}
