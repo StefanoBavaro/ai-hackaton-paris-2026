@@ -42,7 +42,7 @@ Query Examples:
 
 Non-Functional Requirements:
 
-Response time: < 500ms for cached queries, < 2s for complex new queries
+Response time: < 800ms for cached queries, < 3s for complex new queries
 Support 5+ concurrent queries without degradation
 
 
@@ -164,49 +164,52 @@ Animations should be smooth (60fps)
 
 2.4 Data Management
 User Story: As a developer, I need realistic financial data that's fast to query.
-DuckDB Schema:
+DuckDB Schema (current fixtures):
 sqlCREATE TABLE stock_prices (
     ticker VARCHAR,
-    date DATE,
-    open DECIMAL(10,2),
-    high DECIMAL(10,2),
-    low DECIMAL(10,2),
-    close DECIMAL(10,2),
-    volume BIGINT,
-    PRIMARY KEY (ticker, date)
+    date TIMESTAMP,
+    open DOUBLE,
+    high DOUBLE,
+    low DOUBLE,
+    close DOUBLE,
+    volume BIGINT
 );
 
-CREATE TABLE journal_entries (
-    entry_id VARCHAR PRIMARY KEY,
+CREATE TABLE financial_metrics (
     ticker VARCHAR,
-    date DATE,
-    entry_type VARCHAR, -- earnings, acquisition, scandal, product_launch, regulatory
+    report_period DATE,
+    market_cap DOUBLE,
+    pe_ratio DOUBLE,
+    pb_ratio DOUBLE,
+    current_ratio DOUBLE,
+    debt_to_equity DOUBLE,
+    revenue_growth DOUBLE,
+    net_income_growth DOUBLE,
+    free_cash_flow_yield DOUBLE
+);
+
+CREATE TABLE news (
+    ticker VARCHAR,
+    date TIMESTAMP,
     title VARCHAR,
-    summary TEXT,
-    sentiment_score DECIMAL(3,2), -- -1.0 to 1.0
-    price_impact_pct DECIMAL(5,2),
-    metadata JSON
-);
-
-CREATE TABLE portfolio_holdings (
-    ticker VARCHAR,
-    shares INTEGER,
-    cost_basis DECIMAL(10,2),
-    purchase_date DATE
+    author VARCHAR,
+    source VARCHAR,
+    url VARCHAR,
+    sentiment DOUBLE
 );
 ```
 
 **Seed Data Requirements**:
-- 5-7 major tech stocks (AAPL, MSFT, GOOGL, TSLA, NVDA, META, AMZN)
-- 1 year of daily price history
-- SPY benchmark data for comparisons
-- 20-30 journal entries per ticker with diverse event types
+- 3 core tech tickers (AAPL, MSFT, TSLA) from fixtures
+- Daily price history for each ticker
+- Financial metrics per reporting period
+- News items per ticker with sentiment scores
 - Realistic price movements and correlations
 
 **Query Performance Targets**:
 - Price range queries: < 50ms
 - Aggregations (returns, volatility): < 100ms
-- Join queries (prices + events): < 150ms
+- Join queries (prices + news): < 150ms
 
 ---
 
@@ -268,20 +271,21 @@ CREATE TABLE portfolio_holdings (
 ### 4.1 Tech Stack
 
 **Frontend**:
-- React 18 with TypeScript
-- Next.js 14 (App Router)
+- React 19 with TypeScript
+- Next.js 16 (App Router)
 - json-renderer from Vercel for dynamic block rendering
 - Recharts for charts
 - Tailwind CSS for styling
 - Framer Motion for animations
 
 **Backend**:
-- Next.js API routes
-- DuckDB (node-duckdb) for data storage
-- Claude Sonnet 4.5 via Anthropic API
+- FastAPI (Python)
+- DuckDB (python) for data storage
+- OpenAI API (model configurable)
 
 **Deployment**:
-- Vercel (frontend + API)
+- Vercel (frontend)
+- FastAPI backend (separate service)
 - DuckDB file stored in project (< 50MB)
 
 ### 4.2 System Architecture
@@ -297,11 +301,10 @@ CREATE TABLE portfolio_holdings (
          │ HTTP/WebSocket
          │
 ┌────────▼────────────────────────────────┐
-│         Next.js Backend                 │
+│          FastAPI Backend                │
 │                                         │
 │  ┌─────────────┐      ┌──────────────┐ │
-│  │  API Route  │◄────►│  LLM Service │ │
-│  │  /api/query │      │   (Claude)   │ │
+│  │  /api/query │      │   (OpenAI)   │ │
 │  └──────┬──────┘      └──────────────┘ │
 │         │                               │
 │         │                               │
@@ -315,44 +318,46 @@ CREATE TABLE portfolio_holdings (
 │  ┌──────▼──────────┐                   │
 │  │    DuckDB       │                   │
 │  │  - stock_prices │                   │
-│  │  - journal_*    │                   │
+│  │  - financial_*  │                   │
+│  │  - news         │                   │
 │  └─────────────────┘                   │
 └─────────────────────────────────────────┘
 4.3 API Specification
+Reference: see CONTRACT.md for the authoritative backend ↔ frontend contract.
+
 POST /api/query
 Request:
 json{
   "message": "Show me AAPL vs MSFT this quarter",
-  "conversationHistory": [
-    {"role": "user", "content": "..."},
-    {"role": "assistant", "content": "..."}
-  ],
-  "currentDashboard": { /* existing spec if any */ }
+  "currentChaos": {
+    "rotation": 0,
+    "fontFamily": "Inter",
+    "animation": null,
+    "theme": "professional"
+  }
 }
 Response:
 json{
   "dashboardSpec": {
-    "layout": "grid",
     "blocks": [ /* block array */ ],
-    "theme": "professional",
-    "chaosEffects": {
+    "chaos": {
       "rotation": 0,
       "fontFamily": "Inter",
-      "animation": null
+      "animation": null,
+      "theme": "professional"
     }
   },
   "assistantMessage": "Here's the comparison of AAPL vs MSFT...",
+  "intent": "performance_analysis",
   "queryMetadata": {
-    "executionTime": 487,
-    "sqlQueriesRun": 3,
-    "cacheHit": false
+    "executionTimeMs": 487,
+    "sqlQueriesRequested": 3,
+    "sqlQueriesExecuted": 3
   }
 }
-Error Response:
+Error Response (FastAPI):
 json{
-  "error": "Unable to parse query",
-  "message": "Could you specify which ticker symbols you're interested in?",
-  "suggestions": ["Try: 'AAPL performance'", "Try: 'Compare MSFT vs GOOGL'"]
+  "detail": "LLM processing failed"
 }
 ```
 
@@ -389,7 +394,23 @@ Chaos Commands (these override normal query parsing):
 - "professional mode" → reset all effects
 
 Output Format:
-Return JSON only, no explanatory text.
+Return JSON only, no explanatory text. The backend expects:
+{
+  "intent": string,
+  "sqlQueries": string[],
+  "assistantMessage": string,
+  "dashboardSpec": {
+    "blocks": Array<{ "type": string, "props": object }>,
+    "chaos": {
+      "rotation": number,
+      "fontFamily": string,
+      "animation": string | null,
+      "theme": string
+    }
+  }
+}
+Use "QUERY_RESULT_0", "QUERY_RESULT_1", etc. as placeholders in block props for SQL results.
+Additional metadata fields are allowed but ignored by the backend.
 ```
 
 ### 5.2 Example LLM Interactions
@@ -408,33 +429,46 @@ LLM Output:
     "blocks": [
       {
         "type": "executive-summary",
-        "content": "AAPL gained 15.3% in Q4 2024, outperforming the S&P 500 by 3.2 percentage points. Strong iPhone 15 sales and services growth drove the rally."
+        "props": {
+          "content": "AAPL gained 15.3% in Q4 2024. Strong iPhone 15 sales and services growth drove the rally."
+        }
       },
       {
         "type": "kpi-card",
-        "ticker": "AAPL",
-        "metric": "Q4 Return",
-        "value": "+15.3%",
-        "change": "+3.2%",
-        "changeDirection": "up",
-        "comparisonBenchmark": "SPY: +12.1%"
+        "props": {
+          "ticker": "AAPL",
+          "metric": "Q4 Return",
+          "value": "+15.3%",
+          "change": "+3.2%",
+          "changeDirection": "up"
+        }
       },
       {
         "type": "line-chart",
-        "title": "AAPL Price Performance - Q4 2024",
-        "data": "QUERY_RESULT_1",
-        "xKey": "date",
-        "yKeys": ["AAPL", "SPY"]
+        "props": {
+          "title": "AAPL Price Performance - Q4 2024",
+          "data": "QUERY_RESULT_0",
+          "xKey": "date",
+          "yKeys": ["AAPL"]
+        }
       },
       {
         "type": "event-timeline",
-        "events": "QUERY_RESULT_2"
+        "props": {
+          "events": "QUERY_RESULT_1"
+        }
       }
-    ]
+    ],
+    "chaos": {
+      "rotation": 0,
+      "fontFamily": "Inter",
+      "animation": null,
+      "theme": "professional"
+    }
   },
   "sqlQueries": [
     "SELECT date, close as AAPL FROM stock_prices WHERE ticker='AAPL' AND date >= '2024-10-01' AND date <= '2024-12-31'",
-    "SELECT * FROM journal_entries WHERE ticker='AAPL' AND date >= '2024-10-01' AND date <= '2024-12-31' ORDER BY date DESC"
+    "SELECT date, ticker, 'news' as entry_type, title, source as summary, sentiment as sentiment_score, 0.0 as price_impact_pct FROM news WHERE ticker='AAPL' AND date >= '2024-10-01' AND date <= '2024-12-31' ORDER BY date DESC"
   ]
 }
 ```
@@ -446,11 +480,15 @@ User: "flip this dashboard upside down lol"
 LLM Output:
 {
   "intent": "chaos_command",
-  "chaosType": "rotation",
   "assistantMessage": "Flipping it! 🙃",
-  "dashboardUpdate": {
-    "chaosEffects": {
-      "rotation": 180
+  "sqlQueries": [],
+  "dashboardSpec": {
+    "blocks": [],
+    "chaos": {
+      "rotation": 180,
+      "fontFamily": "Inter",
+      "animation": null,
+      "theme": "professional"
     }
   }
 }
@@ -585,7 +623,7 @@ Back to serious
 
 
 7.4 Technical Highlight (30 seconds)
-"Under the hood: DuckDB for sub-100ms queries, Claude for natural language parsing, json-renderer for dynamic UI generation. The entire stack is deployed on Vercel."
+"Under the hood: DuckDB for sub-100ms queries, OpenAI for natural language parsing, json-renderer for dynamic UI generation. The entire stack is deployed on Vercel."
 7.5 Closing (15 seconds)
 "GenUI lets us build interfaces that are both powerful and playful. Thanks!"
 
@@ -596,7 +634,7 @@ Phase 1: Foundation (Day 1)
  Integrate json-renderer
  Create basic chat interface
  Set up DuckDB with schema
- Generate seed data (stock prices + journal entries)
+ Generate seed data (stock prices + news + financial metrics)
 
 Phase 2: Core Features (Day 2)
 
@@ -708,11 +746,11 @@ professional mode, normal, reset
 12.3 Dependencies
 json{
   "dependencies": {
-    "next": "^14.0.0",
-    "react": "^18.0.0",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
     "recharts": "^2.10.0",
     "framer-motion": "^10.16.0",
-    "@anthropic-ai/sdk": "^0.20.0",
+    "openai": "^1.72.0",
     "duckdb": "^0.9.0",
     "tailwindcss": "^3.4.0",
     "@vercel/json-renderer": "latest"

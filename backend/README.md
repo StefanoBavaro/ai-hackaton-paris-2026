@@ -56,6 +56,8 @@ Environment variables:
 You can set these in `backend/.env` (loaded automatically).
 
 ## API
+Contract: see `/Users/mounselam/Desktop/ai-hackaton-paris-2026/CONTRACT.md`.
+
 ### `POST /api/query`
 Request body:
 ```
