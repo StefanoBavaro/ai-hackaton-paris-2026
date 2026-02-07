@@ -91,17 +91,24 @@ def _parse_agent_result(ai_messages: list, current_chaos: Optional[Dict[str, Any
             if text.strip():
                 final_text = text
 
+    logger.debug("Parsing agent result from %d messages", len(ai_messages))
+    for i, msg in enumerate(ai_messages):
+        logger.debug("Message %d: type=%s, content_len=%d", i, getattr(msg, "type", "unknown"), len(str(getattr(msg, "content", ""))))
+
     if not final_text:
+        logger.error("No text response found in messages: %r", ai_messages)
         raise ValueError("Agent did not produce a text response")
 
-    logger.debug("Agent raw output: %s", final_text[:500])
+    logger.debug("Final text for parsing (len=%d): %r", len(final_text), final_text[:500] + "..." if len(final_text) > 500 else final_text)
 
     try:
         parsed = parse_json_from_text(final_text)
+        logger.debug("Successfully parsed JSON")
         # Attach collected tool results for hydration
         parsed["toolResults"] = tool_results
         return parsed
-    except Exception:
+    except Exception as e:
+        logger.warning("JSON parsing failed in _parse_agent_result: %s", str(e))
         logger.info("Agent returned non-JSON text; wrapping as conversational response")
         return {
             "intent": "conversation",

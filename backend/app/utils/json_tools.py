@@ -7,19 +7,58 @@ from typing import Any, Dict, List
 PLACEHOLDER_RE = re.compile(r"^QUERY_RESULT_(\d+)$")
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 def parse_json_from_text(text: str) -> Dict[str, Any]:
     if not text:
         raise ValueError("Empty LLM response")
 
+    logger.debug("Parsing JSON from text (len=%d): %r", len(text), text[:200] + "..." if len(text) > 200 else text)
+
+    # Fast path: try parsing the whole text
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        start_idx = text.find("{")
-        end_idx = text.rfind("}") + 1
-        if start_idx == -1 or end_idx == 0:
-            raise
-        snippet = text[start_idx:end_idx]
-        return json.loads(snippet)
+        pass
+
+    # Heuristic: find the last closing brace '}' and try backward from there
+    # or find the first opening brace '{' and try forward. 
+    # Let's try finding the *outermost* valid JSON object.
+    
+    # We'll try to find the start of the JSON object.
+    # We iterate over all '{' positions.
+    start_indices = [i for i, char in enumerate(text) if char == "{"]
+    
+    if not start_indices:
+         raise json.JSONDecodeError("No '{' found", text, 0)
+         
+    # We also need to find the end. 
+    end_indices = [i for i, char in enumerate(text) if char == "}"]
+    if not end_indices:
+         raise json.JSONDecodeError("No '}' found", text, 0)
+    
+    # Optimization: iterate start indices from first to last
+    # Iterate end indices from last to first
+    
+    for start in start_indices:
+        for end in reversed(end_indices):
+            if end < start:
+                break
+            
+            snippet = text[start : end + 1]
+            try:
+                # We found a valid JSON block
+                return json.loads(snippet)
+            except json.JSONDecodeError:
+                continue
+            
+    # If standard attempts fail, try to use a regex to find a code block
+    # (Already handled by strict subset parsing above effectively if clean)
+            
+    # Detailed failure for debugging
+    raise json.JSONDecodeError(f"Could not extract JSON from text (tried {len(start_indices)} start positions)", text, 0)
 
 
 def normalize_dashboard_spec(spec: Any) -> Dict[str, Any]:
