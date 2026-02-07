@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.schemas.api import QueryRequest, QueryResponse, DashboardSpec
-from app.services.db import db_service
-from app.services.llm import llm_service
+from app.services.agent import agent_service
 from app.utils.json_tools import normalize_dashboard_spec, replace_query_placeholders
 from app.utils.sql_guard import filter_safe_queries
 
@@ -22,44 +23,53 @@ def health_check() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+def _finalize_spec(agent_result: Dict[str, Any], current_chaos: Any) -> Dict[str, Any]:
+    """Normalize dashboard spec from agent result and carry forward chaos."""
+    raw_spec = agent_result.get("dashboardSpec", {}) if isinstance(agent_result, dict) else {}
+    normalized_spec_dict = normalize_dashboard_spec(raw_spec)
+
+    # Handle residual QUERY_RESULT_N placeholders (belt-and-suspenders)
+    sql_queries: List[str] = agent_result.get("sqlQueries", []) if isinstance(agent_result, dict) else []
+    safe_queries = filter_safe_queries(sql_queries)
+    query_results: List[Any] = []
+    if safe_queries:
+        from app.services.db import db_service
+        for sql in safe_queries:
+            try:
+                query_results.append(db_service.query(sql))
+            except Exception:
+                logger.exception("Residual SQL execution failed", extra={"sql": sql})
+                query_results.append([])
+
+    hydrated_spec = replace_query_placeholders(normalized_spec_dict, query_results)
+
+    if current_chaos and not hydrated_spec.get("chaos"):
+        hydrated_spec["chaos"] = current_chaos
+
+    return hydrated_spec, sql_queries, safe_queries
+
+
+# ── Non-streaming endpoint (kept for backward compatibility) ──
+
 @router.post("/api/query", response_model=QueryResponse)
 async def handle_query(request: QueryRequest) -> QueryResponse:
     start_time = time.time()
 
     try:
-        llm_result = await llm_service.process_query(request.message, request.currentChaos)
+        agent_result = await agent_service.process_query(
+            request.message, request.currentChaos
+        )
     except Exception as exc:
-        logger.exception("LLM processing failed")
-        raise HTTPException(status_code=502, detail="LLM processing failed") from exc
+        logger.exception("Agent processing failed")
+        raise HTTPException(status_code=502, detail="Agent processing failed") from exc
 
-    sql_queries: List[str] = llm_result.get("sqlQueries", []) if isinstance(llm_result, dict) else []
-    safe_queries = filter_safe_queries(sql_queries)
+    hydrated_spec, sql_queries, safe_queries = _finalize_spec(agent_result, request.currentChaos)
 
-    if len(safe_queries) < len(sql_queries):
-        logger.warning("Unsafe SQL queries were filtered", extra={"total": len(sql_queries), "safe": len(safe_queries)})
-
-    query_results: List[Any] = []
-    for sql in safe_queries:
-        try:
-            data = db_service.query(sql)
-            query_results.append(data)
-        except Exception:
-            logger.exception("SQL execution failed", extra={"sql": sql})
-            query_results.append([])
-
-    raw_spec = llm_result.get("dashboardSpec", {}) if isinstance(llm_result, dict) else {}
-    normalized_spec_dict = normalize_dashboard_spec(raw_spec)
-    hydrated_spec = replace_query_placeholders(normalized_spec_dict, query_results)
-
-    # Carry forward chaos state if LLM omitted it
-    if request.currentChaos and not hydrated_spec.get("chaos"):
-        hydrated_spec["chaos"] = request.currentChaos
-
-    intent = llm_result.get("intent", "unknown") if isinstance(llm_result, dict) else "unknown"
-    assistant_message = llm_result.get("assistantMessage", "") if isinstance(llm_result, dict) else ""
+    intent = agent_result.get("intent", "unknown") if isinstance(agent_result, dict) else "unknown"
+    assistant_message = agent_result.get("assistantMessage", "") if isinstance(agent_result, dict) else ""
 
     elapsed_ms = int((time.time() - start_time) * 1000)
-    response = QueryResponse(
+    return QueryResponse(
         dashboardSpec=DashboardSpec.model_validate(hydrated_spec),
         assistantMessage=assistant_message,
         intent=intent,
@@ -70,4 +80,61 @@ async def handle_query(request: QueryRequest) -> QueryResponse:
         },
     )
 
-    return response
+
+# ── SSE streaming endpoint ──
+
+@router.post("/api/query/stream")
+async def handle_query_stream(request: QueryRequest) -> StreamingResponse:
+    """Stream agent progress via Server-Sent Events.
+
+    Events:
+      event: step    — agent thinking steps (tool calls, results)
+      event: result  — final JSON response (same shape as POST /api/query)
+      event: error   — error detail
+      event: done    — stream finished
+    """
+    start_time = time.time()
+
+    async def event_generator():
+        try:
+            async for sse_event in agent_service.process_query_stream(
+                request.message, request.currentChaos
+            ):
+                event_type = sse_event["event"]
+                data = sse_event["data"]
+
+                if event_type == "result":
+                    # Finalize the spec the same way as the non-streaming path
+                    hydrated_spec, sql_queries, safe_queries = _finalize_spec(
+                        data, request.currentChaos
+                    )
+                    elapsed_ms = int((time.time() - start_time) * 1000)
+                    final = {
+                        "dashboardSpec": DashboardSpec.model_validate(hydrated_spec).model_dump(),
+                        "assistantMessage": data.get("assistantMessage", ""),
+                        "intent": data.get("intent", "unknown"),
+                        "queryMetadata": {
+                            "executionTimeMs": elapsed_ms,
+                            "sqlQueriesRequested": len(sql_queries),
+                            "sqlQueriesExecuted": len(safe_queries),
+                        },
+                    }
+                    yield f"event: result\ndata: {json.dumps(final, default=str)}\n\n"
+                else:
+                    yield f"event: {event_type}\ndata: {json.dumps(data, default=str)}\n\n"
+
+        except Exception as exc:
+            logger.exception("SSE stream failed")
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

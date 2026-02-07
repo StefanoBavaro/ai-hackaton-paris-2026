@@ -1,0 +1,205 @@
+"""LangGraph agent service for FinanceFlip.
+
+Uses Gemini (via langchain-google-genai) as the LLM inside a LangGraph
+ReAct agent with DuckDB tools.  Replaces the old single-shot LLMService.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, AsyncGenerator, Dict, Optional
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.prebuilt import create_react_agent
+
+from app.core.config import settings
+from app.services.prompts import build_agent_prompt
+from app.services.tools import get_all_tools
+from app.utils.json_tools import parse_json_from_text
+
+logger = logging.getLogger(__name__)
+
+
+def _build_llm() -> ChatGoogleGenerativeAI:
+    """Construct the Gemini chat model."""
+    return ChatGoogleGenerativeAI(
+        model=settings.gemini_model,
+        google_api_key=settings.gemini_api_key,
+        temperature=0.2,
+        convert_system_message_to_human=True,
+    )
+
+
+def _build_graph():
+    """Build a LangGraph ReAct agent wired to Gemini + FinanceFlip tools."""
+    llm = _build_llm()
+    tools = get_all_tools()
+    return create_react_agent(llm, tools).with_config({"recursion_limit": 50})
+
+
+# Module-level singleton (lazy)
+_graph = None
+
+
+def _get_graph():
+    global _graph
+    if _graph is None:
+        _graph = _build_graph()
+    return _graph
+
+
+def _extract_text(content: Any) -> str:
+    """Extract text from a message content that may be str or list-of-parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(part.get("text", str(part)))
+            elif isinstance(part, str):
+                parts.append(part)
+            else:
+                parts.append(str(part))
+        return "\n".join(parts)
+    return str(content) if content else ""
+
+
+def _parse_agent_result(ai_messages: list, current_chaos: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Extract and parse the final JSON from agent messages."""
+    final_text = ""
+    for msg in reversed(ai_messages):
+        if getattr(msg, "type", "") == "tool":
+            continue
+        raw = getattr(msg, "content", None)
+        text = _extract_text(raw)
+        if text.strip():
+            final_text = text
+            break
+
+    if not final_text:
+        raise ValueError("Agent did not produce a text response")
+
+    logger.debug("Agent raw output: %s", final_text[:500])
+
+    try:
+        return parse_json_from_text(final_text)
+    except Exception:
+        logger.info("Agent returned non-JSON text; wrapping as conversational response")
+        return {
+            "intent": "conversation",
+            "sqlQueries": [],
+            "assistantMessage": final_text,
+            "dashboardSpec": {"blocks": [], "chaos": current_chaos or {}},
+        }
+
+
+class AgentService:
+    """Thin wrapper that invokes the LangGraph agent and parses its output."""
+
+    async def process_query(
+        self,
+        message: str,
+        current_chaos: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Run the agent and return the parsed JSON spec (non-streaming)."""
+        graph = _get_graph()
+        system_prompt = build_agent_prompt(current_chaos)
+
+        result = await graph.ainvoke({
+            "messages": [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=message),
+            ]
+        })
+
+        ai_messages = result.get("messages", [])
+        if not ai_messages:
+            raise ValueError("Agent returned no messages")
+
+        return _parse_agent_result(ai_messages, current_chaos)
+
+    async def process_query_stream(
+        self,
+        message: str,
+        current_chaos: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Run the agent and yield SSE events as it progresses.
+
+        Yields dicts with {"event": ..., "data": ...} suitable for SSE.
+        Events:
+          - "step"  : agent thinking / tool call info
+          - "result" : final parsed JSON response
+          - "error"  : error message
+        """
+        graph = _get_graph()
+        system_prompt = build_agent_prompt(current_chaos)
+
+        inputs = {
+            "messages": [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=message),
+            ]
+        }
+
+        all_messages: list = []
+        step_count = 0
+
+        try:
+            async for event in graph.astream_events(inputs, version="v2"):
+                kind = event.get("event", "")
+
+                # Tool call started
+                if kind == "on_tool_start":
+                    tool_name = event.get("name", "unknown")
+                    tool_input = event.get("data", {}).get("input", "")
+                    step_count += 1
+                    yield {
+                        "event": "step",
+                        "data": {
+                            "step": step_count,
+                            "type": "tool_call",
+                            "tool": tool_name,
+                            "input": str(tool_input)[:200],
+                        },
+                    }
+
+                # Tool call finished
+                elif kind == "on_tool_end":
+                    tool_name = event.get("name", "unknown")
+                    output = event.get("data", {}).get("output", "")
+                    output_str = _extract_text(output) if not isinstance(output, str) else output
+                    yield {
+                        "event": "step",
+                        "data": {
+                            "step": step_count,
+                            "type": "tool_result",
+                            "tool": tool_name,
+                            "preview": output_str[:150],
+                        },
+                    }
+
+                # Chat model finished — capture the message
+                elif kind == "on_chat_model_end":
+                    output = event.get("data", {}).get("output", None)
+                    if output and hasattr(output, "content"):
+                        all_messages.append(output)
+
+            # Parse the final result
+            if not all_messages:
+                raise ValueError("Agent returned no messages")
+
+            parsed = _parse_agent_result(all_messages, current_chaos)
+            yield {"event": "result", "data": parsed}
+
+        except Exception as exc:
+            logger.exception("Agent stream failed")
+            yield {
+                "event": "error",
+                "data": {"detail": str(exc)},
+            }
+
+
+agent_service = AgentService()

@@ -7,3 +7,6 @@ python-dotenv
 pandas
 pytest
 httpx
+langchain-core
+langchain-google-genai
+langgraph

@@ -33,10 +33,20 @@ export interface APIResponse {
   suggestedPrompts?: string[]
 }
 
+/** An agent thinking step streamed via SSE. */
+export interface AgentStep {
+  step: number
+  type: "tool_call" | "tool_result"
+  tool: string
+  input?: string
+  preview?: string
+}
+
 export interface Message {
   id: string
   role: "user" | "assistant"
   content: string
   dashboardSpec?: DashboardSpec
   suggestedPrompts?: string[]
+  steps?: AgentStep[]
 }

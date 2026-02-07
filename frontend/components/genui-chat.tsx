@@ -1,10 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef } from "react"
 import { ChatInput } from "@/components/chat/chat-input"
 import { ChatMessage } from "@/components/chat/chat-message"
 import { SuggestedPrompts } from "@/components/chat/suggested-prompts"
-import type { Message, ChaosState } from "@/lib/types"
+import type { Message, ChaosState, AgentStep } from "@/lib/types"
 import { validateAPIResponse } from "@/lib/validate"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
@@ -20,6 +20,8 @@ export function GenUIChat() {
     const [messages, setMessages] = useState<Message[]>([])
     const [isLoading, setIsLoading] = useState(false)
     const [currentChaos, setCurrentChaos] = useState<ChaosState>(DEFAULT_CHAOS)
+    const [streamingSteps, setStreamingSteps] = useState<AgentStep[]>([])
+    const abortRef = useRef<AbortController | null>(null)
 
     const handleSubmit = async (query: string) => {
         const userMessage: Message = {
@@ -29,69 +31,164 @@ export function GenUIChat() {
         }
         setMessages((prev) => [...prev, userMessage])
         setIsLoading(true)
+        setStreamingSteps([])
+
+        abortRef.current = new AbortController()
 
         try {
-            const response = await fetch(`${API_URL}/api/query`, {
+            const response = await fetch(`${API_URL}/api/query/stream`, {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    message: query,
-                    currentChaos,
-                }),
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: query, currentChaos }),
+                signal: abortRef.current.signal,
             })
 
-            if (!response.ok) {
-                throw new Error("Failed to fetch from backend")
+            if (!response.ok || !response.body) {
+                throw new Error("Failed to connect to stream")
             }
 
-            const data = await response.json()
+            const reader = response.body.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ""
 
-            // Validate the API response against the contract
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split("\n")
+                buffer = lines.pop() || ""
+
+                let currentEvent = ""
+                for (const line of lines) {
+                    if (line.startsWith("event: ")) {
+                        currentEvent = line.slice(7).trim()
+                    } else if (line.startsWith("data: ") && currentEvent) {
+                        const dataStr = line.slice(6)
+                        try {
+                            const data = JSON.parse(dataStr)
+                            handleSSEEvent(currentEvent, data, query)
+                        } catch {
+                            // skip malformed JSON
+                        }
+                        currentEvent = ""
+                    }
+                }
+            }
+        } catch (error) {
+            if ((error as Error).name === "AbortError") return
+            console.error("Stream error:", error)
+            // Fallback to non-streaming endpoint
+            await handleFallback(query)
+        } finally {
+            setIsLoading(false)
+            setStreamingSteps([])
+            abortRef.current = null
+        }
+    }
+
+    const handleSSEEvent = (event: string, data: any, _query: string) => {
+        if (event === "step") {
+            setStreamingSteps((prev) => [...prev, data as AgentStep])
+        } else if (event === "result") {
             const { response: validated, errors } = validateAPIResponse(data)
 
             if (!validated) {
                 const errorMessage: Message = {
                     id: (Date.now() + 1).toString(),
                     role: "assistant",
-                    content: `The server returned an unexpected response.\n${errors.map(e => `• ${e}`).join("\n")}`,
+                    content: `The server returned an unexpected response.\n${errors.map((e: string) => `• ${e}`).join("\n")}`,
                 }
                 setMessages((prev) => [...prev, errorMessage])
                 return
             }
 
-            // Persist chaos: merge incoming chaos on top of current state
-            // CONTRACT.md: "Chaos state persists across queries unless explicitly overridden"
             if (validated.dashboardSpec?.chaos) {
                 setCurrentChaos((prev) => ({ ...prev, ...validated.dashboardSpec!.chaos }))
             }
 
-            const assistantMessage: Message = {
-                id: (Date.now() + 1).toString(),
-                role: "assistant",
-                content: validated.assistantMessage,
-                dashboardSpec: validated.dashboardSpec,
-                suggestedPrompts: validated.suggestedPrompts,
-            }
-
-            setMessages((prev) => [...prev, assistantMessage])
-        } catch (error) {
-            console.error("Error submitting query:", error)
+            setMessages((prev) => {
+                // Collect steps accumulated so far
+                const steps = [...(prev.length > 0 ? [] : [])];
+                return [
+                    ...prev,
+                    {
+                        id: (Date.now() + 1).toString(),
+                        role: "assistant" as const,
+                        content: validated.assistantMessage,
+                        dashboardSpec: validated.dashboardSpec,
+                        suggestedPrompts: validated.suggestedPrompts,
+                    },
+                ]
+            })
+        } else if (event === "error") {
             const errorMessage: Message = {
                 id: (Date.now() + 1).toString(),
                 role: "assistant",
-                content: "I'm sorry, I encountered an error while processing your request. Please ensure the backend server is running.",
+                content: `Agent error: ${data.detail || "Unknown error"}`,
             }
             setMessages((prev) => [...prev, errorMessage])
-        } finally {
-            setIsLoading(false)
+        }
+    }
+
+    /** Fallback to non-streaming POST /api/query */
+    const handleFallback = async (query: string) => {
+        try {
+            const response = await fetch(`${API_URL}/api/query`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: query, currentChaos }),
+            })
+
+            if (!response.ok) throw new Error("Fallback fetch failed")
+
+            const data = await response.json()
+            const { response: validated, errors } = validateAPIResponse(data)
+
+            if (!validated) {
+                setMessages((prev) => [
+                    ...prev,
+                    {
+                        id: (Date.now() + 1).toString(),
+                        role: "assistant",
+                        content: `The server returned an unexpected response.\n${errors.map((e: string) => `• ${e}`).join("\n")}`,
+                    },
+                ])
+                return
+            }
+
+            if (validated.dashboardSpec?.chaos) {
+                setCurrentChaos((prev) => ({ ...prev, ...validated.dashboardSpec!.chaos }))
+            }
+
+            setMessages((prev) => [
+                ...prev,
+                {
+                    id: (Date.now() + 1).toString(),
+                    role: "assistant",
+                    content: validated.assistantMessage,
+                    dashboardSpec: validated.dashboardSpec,
+                    suggestedPrompts: validated.suggestedPrompts,
+                },
+            ])
+        } catch (error) {
+            console.error("Fallback error:", error)
+            setMessages((prev) => [
+                ...prev,
+                {
+                    id: (Date.now() + 1).toString(),
+                    role: "assistant",
+                    content: "I'm sorry, I encountered an error while processing your request. Please ensure the backend server is running.",
+                },
+            ])
         }
     }
 
     const handleClearChat = () => {
+        if (abortRef.current) abortRef.current.abort()
         setMessages([])
         setCurrentChaos(DEFAULT_CHAOS)
+        setStreamingSteps([])
     }
 
     return (
@@ -102,7 +199,7 @@ export function GenUIChat() {
                     <div>
                         <h1 className="font-serif text-3xl font-medium tracking-tight text-accent italic">FinanceFlip Dashboard</h1>
                         <p className="mt-1 text-sm text-muted-foreground">
-                            Ask financial questions in natural language. Powered by DuckDB and Claude 4.5.
+                            Ask financial questions in natural language. Powered by DuckDB and Gemini.
                         </p>
                     </div>
                     <button
@@ -119,10 +216,36 @@ export function GenUIChat() {
                         <ChatMessage key={message.id} message={message} />
                     ))}
 
+                    {/* Streaming progress indicator */}
                     {isLoading && (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-                            <span className="font-serif italic text-blue-600">Generating your dashboard...</span>
+                        <div className="space-y-2">
+                            {streamingSteps.length > 0 ? (
+                                <div className="space-y-1.5">
+                                    {streamingSteps.map((step, i) => (
+                                        <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                                            <div className="h-1 w-1 rounded-full bg-blue-400" />
+                                            {step.type === "tool_call" ? (
+                                                <span>
+                                                    Querying <span className="font-mono text-blue-600">{step.tool}</span>...
+                                                </span>
+                                            ) : (
+                                                <span>
+                                                    Got results from <span className="font-mono text-green-600">{step.tool}</span>
+                                                </span>
+                                            )}
+                                        </div>
+                                    ))}
+                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                        <div className="h-1 w-1 animate-pulse rounded-full bg-accent" />
+                                        <span className="font-serif italic text-blue-600">Thinking...</span>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                    <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                                    <span className="font-serif italic text-blue-600">Generating your dashboard...</span>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>

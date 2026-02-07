@@ -22,6 +22,8 @@ class Settings:
     db_path: str = os.getenv("FINANCE_DB_PATH", str(DEFAULT_DB_PATH))
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-5")
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     cors_origins: List[str] = field(
         default_factory=lambda: [
