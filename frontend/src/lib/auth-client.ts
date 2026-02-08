@@ -4,7 +4,7 @@ export const useSession = () => {
 		data: {
 			user: {
 				id: 'local',
-				name: 'Local User',
+				name: 'Mouns',
 				email: 'local@localhost',
 				requiresPasswordReset: false,
 			},
