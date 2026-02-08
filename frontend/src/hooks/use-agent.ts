@@ -44,6 +44,7 @@ export const useAgent = (): AgentHelpers => {
 	const [error, setError] = useState<Error | undefined>(undefined);
 	const [currentChaos, setCurrentChaos] = useState<ChaosState>(DEFAULT_CHAOS);
 	const abortRef = useRef<AbortController | null>(null);
+	const streamedTextRef = useRef<Record<string, string>>({});
 	const scrollDownService = useScrollDownCallbackService();
 
 	const clearError = useCallback(() => setError(undefined), []);
@@ -74,6 +75,7 @@ export const useAgent = (): AgentHelpers => {
 
 			abortRef.current = new AbortController();
 			const assistantId = assistantMessage.id;
+			streamedTextRef.current[assistantId] = '';
 			let gotResult = false;
 
 			const handleFallback = async () => {
@@ -89,7 +91,11 @@ export const useAgent = (): AgentHelpers => {
 				if (data?.dashboardSpec?.chaos) {
 					setCurrentChaos((prev) => ({ ...prev, ...data.dashboardSpec.chaos }));
 				}
-				const finalText = `${data.assistantMessage ?? ''}\n${JSON.stringify(data)}`;
+				const fallbackText =
+					(data.assistantMessage && data.assistantMessage.trim()) ||
+					streamedTextRef.current[assistantId] ||
+					'';
+				const finalText = `${fallbackText}\n${JSON.stringify(data)}`;
 				updateAssistantText(assistantId, finalText, false);
 			};
 
@@ -125,6 +131,7 @@ export const useAgent = (): AgentHelpers => {
 						const data = JSON.parse(dataStr);
 						if (currentEvent === 'content') {
 							const delta = data?.delta ?? '';
+							streamedTextRef.current[assistantId] = `${streamedTextRef.current[assistantId] || ''}${delta}`;
 							setMessages((prev) =>
 								prev.map((m) =>
 									m.id === assistantId
@@ -146,7 +153,11 @@ export const useAgent = (): AgentHelpers => {
 							if (data?.dashboardSpec?.chaos) {
 								setCurrentChaos((prev) => ({ ...prev, ...data.dashboardSpec.chaos }));
 							}
-							const finalText = `${data.assistantMessage ?? ''}\n${JSON.stringify(data)}`;
+							const finalMessage =
+								(data.assistantMessage && data.assistantMessage.trim()) ||
+								streamedTextRef.current[assistantId] ||
+								'';
+							const finalText = `${finalMessage}\n${JSON.stringify(data)}`;
 							updateAssistantText(assistantId, finalText, false);
 						} else if (currentEvent === 'error') {
 							setError(new Error(data?.detail || 'Agent error'));
@@ -207,6 +218,7 @@ export const useAgent = (): AgentHelpers => {
 			} finally {
 				setStatus('idle');
 				abortRef.current = null;
+				delete streamedTextRef.current[assistantId];
 			}
 		},
 		[clearError, currentChaos, scrollDownService, status, updateAssistantText],

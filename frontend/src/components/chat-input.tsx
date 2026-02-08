@@ -28,7 +28,7 @@ export function ChatInput() {
 	};
 
 	return (
-		<div className='p-4 pt-0 max-w-3xl w-full mx-auto'>
+		<div className='p-4 pt-0 max-w-5xl w-full mx-auto'>
 			<form onSubmit={handleSubmit} className='mx-auto'>
 				<InputGroup htmlFor='chat-input'>
 					<InputGroupTextarea

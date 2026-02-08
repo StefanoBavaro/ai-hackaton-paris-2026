@@ -127,6 +127,7 @@ async def handle_query_stream(request: QueryRequest) -> StreamingResponse:
     start_time = time.time()
 
     async def event_generator():
+        streamed_content = False
         try:
             async for sse_event in agent_service.process_query_stream(
                 request.message, request.currentChaos
@@ -152,8 +153,17 @@ async def handle_query_stream(request: QueryRequest) -> StreamingResponse:
                             "sqlQueriesExecuted": len(safe_queries),
                         },
                     }
+                    # If the model never streamed content, simulate a short stream from assistantMessage
+                    assistant_msg = final.get("assistantMessage") or ""
+                    if assistant_msg and not streamed_content:
+                        chunk_size = 80
+                        for i in range(0, len(assistant_msg), chunk_size):
+                            chunk = assistant_msg[i : i + chunk_size]
+                            yield f"event: content\ndata: {json.dumps({'delta': chunk}, default=str)}\n\n"
+                        streamed_content = True
                     yield f"event: result\ndata: {json.dumps(final, default=str)}\n\n"
                 elif event_type == "content":
+                    streamed_content = True
                     yield f"event: content\ndata: {json.dumps(data, default=str)}\n\n"
                 else:
                     yield f"event: {event_type}\ndata: {json.dumps(data, default=str)}\n\n"

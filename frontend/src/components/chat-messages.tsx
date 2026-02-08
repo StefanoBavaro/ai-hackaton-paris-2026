@@ -40,7 +40,7 @@ export function ChatMessages() {
 			style={{ '--container-height': `${containerHeight}px` } as React.CSSProperties}
 		>
 			<Conversation resize={shouldResizeSmoothly ? 'smooth' : 'instant'}>
-				<ConversationContent className='max-w-3xl mx-auto'>
+				<ConversationContent className='max-w-5xl mx-auto'>
 					<ChatMessagesContent isAgentGenerating={isAgentGenerating} />
 				</ConversationContent>
 
