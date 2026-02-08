@@ -219,7 +219,7 @@ async def voice_stt_websocket(client_ws: WebSocket) -> None:
     try:
         async with websockets.connect(
             gradium_url,
-            extra_headers={"x-api-key": settings.gradium_api_key},
+            additional_headers={"x-api-key": settings.gradium_api_key},
             max_size=None,
         ) as gradium_ws:
             setup_msg = {

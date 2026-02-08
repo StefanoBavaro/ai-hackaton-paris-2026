@@ -61,6 +61,7 @@ export const VoiceProvider = ({ children }: { children: React.ReactNode }) => {
 			const blob = await response.blob();
 			const url = URL.createObjectURL(blob);
 			const audio = new Audio(url);
+			audio.playbackRate = 1.25;
 			audioRef.current = audio;
 
 			audio.onended = () => {
