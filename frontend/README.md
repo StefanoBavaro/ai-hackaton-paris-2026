@@ -39,6 +39,24 @@ npm run format
 npm run check
 ```
 
+## Voice
+This UI supports:
+- Speech-to-text (mic button)
+- Text-to-speech (speaker toggle)
+
+Voice uses backend proxy endpoints:
+- `WS /api/voice/stt`
+- `POST /api/voice/tts`
+
+Configure the backend URL (if not `http://localhost:8000`) in:
+```
+/Users/mounselam/Desktop/ai-hackaton-paris-2026/frontend/.env
+```
+with:
+```
+VITE_FASTAPI_URL=http://localhost:8000
+```
+
 ## Routing
 
 This project uses [TanStack Router](https://tanstack.com/router). The initial setup is a file based router. Which means that the routes are managed as files in `src/routes`.

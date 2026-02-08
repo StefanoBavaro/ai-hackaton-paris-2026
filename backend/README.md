@@ -1,12 +1,16 @@
 # FinanceFlip Backend (FastAPI)
 
-FastAPI service for the FinanceFlip demo. It uses DuckDB for analytics data and the OpenAI API for query parsing and dashboard spec generation.
+FastAPI service for the FinanceFlip demo. It uses DuckDB for analytics data and a LangGraph + Gemini agent to generate dashboard specs.
 
 ## Features
 - `POST /api/query` parses a natural-language prompt, runs safe SQL, and returns a dashboard spec.
+- `POST /api/query/stream` streams partial assistant output + final JSON via SSE.
 - `GET /health` returns a simple status.
 - SQL safety guardrails (SELECT-only, allowed tables).
-- Schema-aligned LLM prompt for the existing DuckDB dataset.
+- Schema-aligned agent prompt for the existing DuckDB dataset.
+- Voice proxy endpoints for Gradium:
+  - `WS /api/voice/stt` (speech-to-text)
+  - `POST /api/voice/tts` (text-to-speech)
 
 ## Recent Changes (Backend Restructure)
 - Introduced a proper FastAPI package layout under `app/`.
@@ -17,12 +21,13 @@ FastAPI service for the FinanceFlip demo. It uses DuckDB for analytics data and 
 - Carried forward chaos state when omitted from the LLM response.
 - Updated the DB smoke test to match the real schema.
 - Added pytest coverage for SQL guardrails, JSON tools, and the query endpoint.
-- Switched LLM integration from Anthropic to the OpenAI API.
+- Switched LLM integration to LangGraph + Gemini.
+- Added Gradium voice proxy endpoints (STT + TTS).
 
 ## Tech Stack
 - FastAPI + Uvicorn
 - DuckDB
-- OpenAI SDK
+- LangGraph + Gemini (langchain-google-genai)
 - Pydantic v2
 
 ## Requirements
@@ -47,11 +52,16 @@ curl http://localhost:8000/health
 
 ## Configuration
 Environment variables:
-- `OPENAI_API_KEY` (required for live LLM calls)
-- `OPENAI_MODEL` (default: `gpt-5`)
+- `GEMINI_API_KEY` (required for live LLM calls)
+- `GEMINI_MODEL` (default: `gemini-2.5-flash`)
 - `FINANCE_DB_PATH` (default: `../data/finance.db`)
 - `CORS_ALLOW_ORIGINS` (default: `*`)
 - `LOG_LEVEL` (default: `INFO`)
+- `GRADIUM_API_KEY` (required for voice STT/TTS)
+- `GRADIUM_REGION` (default: `eu`)
+- `GRADIUM_TTS_VOICE_ID` (default: `b35yykvVppLXyw_l`)
+- `GRADIUM_TTS_MODEL` (default: `default`)
+- `GRADIUM_TTS_OUTPUT_FORMAT` (default: `wav`)
 
 You can set these in `backend/.env` (loaded automatically).
 
@@ -71,6 +81,18 @@ Request body:
   }
 }
 ```
+
+### `POST /api/voice/tts`
+Request body:
+```
+{
+  "text": "Hello from FinanceFlip"
+}
+```
+
+### `WS /api/voice/stt`
+Open a WebSocket and stream PCM audio frames; the backend forwards to Gradium and
+relays transcript events back to the client.
 
 Response body:
 ```
@@ -110,7 +132,7 @@ Notes:
 - `app/main.py` FastAPI app
 - `app/api/routes.py` API endpoints
 - `app/services/db.py` DuckDB access
-- `app/services/llm.py` Claude integration and prompt
+- `app/services/agent.py` LangGraph agent and prompt orchestration
 - `app/utils/sql_guard.py` SQL safety checks
 - `app/utils/json_tools.py` JSON parsing and placeholder hydration
 - `main.py` Uvicorn entrypoint
@@ -140,4 +162,4 @@ make backend
 ## Troubleshooting
 - `ValueError: mutable default ...` in config: ensure `app/core/config.py` uses `default_factory` for list fields.
 - `ModuleNotFoundError: duckdb`: run `uv sync` to install dependencies.
-- LLM JSON parsing errors: check `OPENAI_API_KEY` and the prompt in `app/services/llm.py`.
+- LLM JSON parsing errors: check `GEMINI_API_KEY` and the prompt in `app/services/prompts.py`.

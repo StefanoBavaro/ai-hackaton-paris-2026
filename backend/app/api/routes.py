@@ -14,6 +14,7 @@ import websockets
 
 from app.core.config import settings
 from app.schemas.api import QueryRequest, QueryResponse, DashboardSpec, TTSRequest
+from app.services.db import db_service
 from app.services.agent import agent_service
 from app.utils.json_tools import normalize_dashboard_spec, replace_query_placeholders
 from app.utils.sql_guard import filter_safe_queries
@@ -84,6 +85,77 @@ def _maybe_strip_blocks(
     return hydrated_spec
 
 
+def _infer_ticker_from_text(text: str) -> str | None:
+    if not text:
+        return None
+    for ticker in ("AAPL", "MSFT", "TSLA"):
+        if ticker in text.upper():
+            return ticker
+    return None
+
+
+def _infer_days_from_text(text: str) -> int | None:
+    if not text:
+        return None
+    import re
+
+    match = re.search(r"last\\s+(\\d+)\\s+day", text, flags=re.IGNORECASE)
+    if match:
+        try:
+            return max(1, int(match.group(1)))
+        except ValueError:
+            return None
+    return None
+
+
+def _hydrate_missing_time_series(hydrated_spec: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(hydrated_spec, dict):
+        return hydrated_spec
+    blocks = hydrated_spec.get("blocks")
+    if not isinstance(blocks, list):
+        return hydrated_spec
+
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type not in {"line-chart", "candlestick-chart"}:
+            continue
+        props = block.get("props")
+        if not isinstance(props, dict):
+            continue
+        data = props.get("data")
+        if isinstance(data, list) and len(data) > 0:
+            continue
+
+        title = str(props.get("title") or "")
+        ticker = props.get("ticker") or _infer_ticker_from_text(title)
+        if not ticker:
+            continue
+
+        days = _infer_days_from_text(title) or 30
+        query = f"""
+            SELECT * FROM (
+                SELECT date, open, high, low, close
+                FROM stock_prices
+                WHERE ticker = '{ticker}'
+                ORDER BY date DESC
+                LIMIT {days}
+            ) t
+            ORDER BY date ASC
+        """.strip()
+        try:
+            rows = db_service.query(query)
+            props["data"] = rows
+            if block_type == "line-chart":
+                props.setdefault("xKey", "date")
+                props.setdefault("yKeys", ["close"])
+        except Exception:
+            logger.exception("Time series fallback query failed", extra={"ticker": ticker})
+
+    return hydrated_spec
+
+
 # ── Non-streaming endpoint (kept for backward compatibility) ──
 
 @router.post("/api/query", response_model=QueryResponse)
@@ -103,6 +175,7 @@ async def handle_query(request: QueryRequest) -> QueryResponse:
     intent = agent_result.get("intent", "unknown") if isinstance(agent_result, dict) else "unknown"
     assistant_message = agent_result.get("assistantMessage", "") if isinstance(agent_result, dict) else ""
     hydrated_spec = _maybe_strip_blocks(hydrated_spec, intent, sql_queries, safe_queries)
+    hydrated_spec = _hydrate_missing_time_series(hydrated_spec)
 
     elapsed_ms = int((time.time() - start_time) * 1000)
     return QueryResponse(
@@ -147,6 +220,7 @@ async def handle_query_stream(request: QueryRequest) -> StreamingResponse:
                     )
                     intent = data.get("intent", "unknown") if isinstance(data, dict) else "unknown"
                     hydrated_spec = _maybe_strip_blocks(hydrated_spec, intent, sql_queries, safe_queries)
+                    hydrated_spec = _hydrate_missing_time_series(hydrated_spec)
                     elapsed_ms = int((time.time() - start_time) * 1000)
                     final = {
                         "dashboardSpec": DashboardSpec.model_validate(hydrated_spec).model_dump(),
