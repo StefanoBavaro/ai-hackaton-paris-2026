@@ -56,6 +56,29 @@ def _finalize_spec(agent_result: Dict[str, Any], current_chaos: Any) -> Dict[str
     return hydrated_spec, sql_queries, safe_queries
 
 
+def _maybe_strip_blocks(
+    hydrated_spec: Dict[str, Any],
+    intent: str,
+    sql_queries: List[str],
+    safe_queries: List[str],
+) -> Dict[str, Any]:
+    """Avoid rendering generic blocks for small talk / no-data responses."""
+    blocks = hydrated_spec.get("blocks") if isinstance(hydrated_spec, dict) else None
+    if not isinstance(blocks, list):
+        return hydrated_spec
+
+    # If no SQL queries were executed, prefer no dashboard blocks
+    if not safe_queries:
+        only_exec_summary = (
+            len(blocks) == 1
+            and isinstance(blocks[0], dict)
+            and blocks[0].get("type") == "executive-summary"
+        )
+        if only_exec_summary or intent == "conversation":
+            hydrated_spec["blocks"] = []
+    return hydrated_spec
+
+
 # ── Non-streaming endpoint (kept for backward compatibility) ──
 
 @router.post("/api/query", response_model=QueryResponse)
@@ -74,6 +97,7 @@ async def handle_query(request: QueryRequest) -> QueryResponse:
 
     intent = agent_result.get("intent", "unknown") if isinstance(agent_result, dict) else "unknown"
     assistant_message = agent_result.get("assistantMessage", "") if isinstance(agent_result, dict) else ""
+    hydrated_spec = _maybe_strip_blocks(hydrated_spec, intent, sql_queries, safe_queries)
 
     elapsed_ms = int((time.time() - start_time) * 1000)
     return QueryResponse(
@@ -115,6 +139,8 @@ async def handle_query_stream(request: QueryRequest) -> StreamingResponse:
                     hydrated_spec, sql_queries, safe_queries = _finalize_spec(
                         data, request.currentChaos
                     )
+                    intent = data.get("intent", "unknown") if isinstance(data, dict) else "unknown"
+                    hydrated_spec = _maybe_strip_blocks(hydrated_spec, intent, sql_queries, safe_queries)
                     elapsed_ms = int((time.time() - start_time) * 1000)
                     final = {
                         "dashboardSpec": DashboardSpec.model_validate(hydrated_spec).model_dump(),

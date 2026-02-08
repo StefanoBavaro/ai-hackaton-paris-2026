@@ -65,7 +65,8 @@ IMPORTANT:
 • Use "QUERY_RESULT_0", "QUERY_RESULT_1", etc. as placeholders in the props for data that you fetch using the `run_query` tool.
 • The backend will automatically replace these placeholders with the actual tool results.
 • Format numbers nicely in kpi-card values/changes (e.g. "$182.34", "+4.5%").
-• Always include an executive-summary block first.
+• Always include an executive-summary block first for data questions.
+• If the user is greeting, small talk, or not asking for data, set intent to "conversation" and return dashboardSpec.blocks as [].
 • ONLY use the `run_query` tool to fetch data from the database.
 
 ──────────────────

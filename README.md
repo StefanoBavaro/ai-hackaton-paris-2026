@@ -5,7 +5,7 @@ This repo is now a single FastAPI backend and a single frontend UI.
 **Kept**
 - `backend/` — FastAPI (FinanceFlip)
 - `data/finance.db` — local DuckDB data
-- `nao-slackin/apps/frontend/` — UI wired to FastAPI
+- `frontend/` — UI wired to FastAPI
 
 ## Run Locally
 
@@ -18,7 +18,7 @@ uv run uvicorn main:app --reload --port 8000
 
 ### 2) Frontend
 ```
-cd /Users/mounselam/Desktop/ai-hackaton-paris-2026/nao-slackin/apps/frontend
+cd /Users/mounselam/Desktop/ai-hackaton-paris-2026/frontend
 npm install
 npm run dev
 ```
@@ -31,7 +31,7 @@ http://localhost:3000
 ## Optional
 If you want a different backend URL, create:
 ```
-/Users/mounselam/Desktop/ai-hackaton-paris-2026/nao-slackin/apps/frontend/.env
+/Users/mounselam/Desktop/ai-hackaton-paris-2026/frontend/.env
 ```
 with:
 ```
